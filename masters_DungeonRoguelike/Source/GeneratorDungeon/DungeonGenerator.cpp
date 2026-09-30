@@ -40,28 +40,19 @@ void ADungeonGenerator::BeginPlay()
 	Super::BeginPlay();
     TArray<TArray<TCHAR>> grid;
 
-    root = MakeUnique<Node>(Node{ {0, 0, DungeonWidth, DungeonHeight} });
-    splitRecursively(root.Get(), MinSizeArea, MaxIterations);
-    createRooms(root.Get());
-
-    initializeGrid(grid);
-    int32 OffSet = grid.Num() * TileSize;
-    //SetActorLocation(FVector(OffSet, 0, 0));
-
-    drawRoom(grid);
-    for (size_t i = 1; i < Rooms.Num(); i++) {
-        createCorridor(grid, Rooms[i - 1]->ToRect(), Rooms[i]->ToRect(), BonusWall);
+    if (GenerationMethod == EDungeonGenerationMethod::BSP)
+    {
+        GenerateBSP(grid);
     }
-    createCorridor(grid, Rooms[0]->ToRect(), Rooms[Rooms.Num() - 1]->ToRect(), BonusWall);
-    dlaBlur(grid, PowerBlur);
-    DeleteUnseenWall(grid);
+    else if (GenerationMethod == EDungeonGenerationMethod::CellularAutomata)
+    {
+        GenerateCaves(grid);
+    }
 
-    DrawDungeon(grid);
-
-    //GenerateCellularAutomata(grid, 48, 5);
-    //CheckConnectivityParallel(grid);
 
     
+    DeleteUnseenWall(grid);
+    DrawDungeon(grid);
     GenerateNavMesh();
 
     TransformRoomsToWorldCoordinates();
@@ -69,15 +60,28 @@ void ADungeonGenerator::BeginPlay()
 
 
 
-    SpawnElement();
-    FTimerHandle TimerHandle;
-    GetWorldTimerManager().SetTimer(
-        TimerHandle,
-        this,
-        &ADungeonGenerator::SpawnEnemy,
-        0.7f, 
-        false
-    );
+    if (GenerationMethod == EDungeonGenerationMethod::BSP)
+    {
+        if (Rooms.Num() >= 2)
+        {
+            TransformRoomsToWorldCoordinates();
+            SelectStartEndRoom();
+            SpawnElement();
+
+            FTimerHandle TimerHandle;
+            GetWorldTimerManager().SetTimer(
+                TimerHandle,
+                this,
+                &ADungeonGenerator::SpawnEnemy,
+                0.7f,
+                false
+            );
+        }
+    }
+    else if (GenerationMethod == EDungeonGenerationMethod::CellularAutomata)
+    {
+        SpawnPlayerForCaves(grid);
+    }
     
     
     WallISM->RegisterComponent();
@@ -94,6 +98,58 @@ void ADungeonGenerator::BeginPlay()
     FloorISM->SetCollisionObjectType(ECC_WorldStatic);
     FloorISM->SetGenerateOverlapEvents(false);
 
+}
+
+
+void ADungeonGenerator::GenerateBSP(TArray<TArray<TCHAR>>& grid)
+{
+    Rooms.Empty(); 
+
+    root = MakeUnique<Node>(Node{ {0, 0, DungeonWidth, DungeonHeight} });
+    splitRecursively(root.Get(), MinSizeArea, MaxIterations);
+    createRooms(root.Get());
+
+    initializeGrid(grid);
+
+    drawRoom(grid);
+    for (size_t i = 1; i < Rooms.Num(); i++) {
+        createCorridor(grid, Rooms[i - 1]->ToRect(), Rooms[i]->ToRect(), BonusWall);
+    }
+    if (Rooms.Num() > 0) {
+        createCorridor(grid, Rooms[0]->ToRect(), Rooms[Rooms.Num() - 1]->ToRect(), BonusWall);
+    }
+
+    dlaBlur(grid, PowerBlur);
+}
+
+void ADungeonGenerator::SpawnPlayerForCaves(const TArray<TArray<TCHAR>>& grid)
+{
+    for (int32 Y = 0; Y < grid.Num(); Y++)
+    {
+        for (int32 X = 0; X < grid[Y].Num(); X++)
+        {
+            if (grid[Y][X] == '-')
+            {
+                float SpawnX = X * TileSize;
+                float SpawnY = Y * TileSize;
+                FVector SpawnLoc(SpawnX, SpawnY, 200.f);
+
+                APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0);
+                if (PC && PC->GetPawn())
+                {
+                    PC->GetPawn()->SetActorLocation(SpawnLoc);
+                }
+
+                return;
+            }
+        }
+    }
+}
+
+void ADungeonGenerator::GenerateCaves(TArray<TArray<TCHAR>>& grid)
+{
+    GenerateCellularAutomata(grid, 48, 5);
+    CheckConnectivityParallel(grid);
 }
 
 void ADungeonGenerator::GenerateNavMesh()
@@ -770,4 +826,38 @@ void ADungeonGenerator::DrawDungeonVisualZones(TArray<TArray<TCHAR>>& grid, TArr
             }
         }
     }
+}
+
+
+void ADungeonGenerator::RunStressTest()
+{
+    UE_LOG(LogTemp, Warning, TEXT("--- Test generation ---"));
+
+    int32 TestIterations = 1000; 
+    TArray<TArray<TCHAR>> TempGrid;
+
+    double TotalTimeBSP = 0.0;
+    for (int32 i = 0; i < TestIterations; i++)
+    {
+        double StartTime = FPlatformTime::Seconds();
+        GenerateBSP(TempGrid);
+        double EndTime = FPlatformTime::Seconds();
+        TotalTimeBSP += (EndTime - StartTime);
+    }
+    double AverageTimeBSP = (TotalTimeBSP / TestIterations) * 1000.0; 
+
+    double TotalTimeCA = 0.0;
+    for (int32 i = 0; i < TestIterations; i++)
+    {
+        double StartTime = FPlatformTime::Seconds();
+        GenerateCaves(TempGrid);
+        double EndTime = FPlatformTime::Seconds();
+        TotalTimeCA += (EndTime - StartTime);
+    }
+    double AverageTimeCA = (TotalTimeCA / TestIterations) * 1000.0; 
+
+    UE_LOG(LogTemp, Warning, TEXT("Size: %d x %d"), DungeonWidth, DungeonHeight);
+    UE_LOG(LogTemp, Warning, TEXT("average time generation for BSP (1000 itarations) + blur power(%d): %f ms"), PowerBlur, AverageTimeBSP);
+    UE_LOG(LogTemp, Warning, TEXT("average time generation for CA (1000 itarations): %f ms"), AverageTimeCA);
+    UE_LOG(LogTemp, Warning, TEXT("--------------------------------------"));
 }

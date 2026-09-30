@@ -28,6 +28,10 @@ public:
 	// Sets default values for this actor's properties
 	ADungeonGenerator();
 
+
+	UFUNCTION(CallInEditor, Category = "Dungeon Settings | Testing")
+	void RunStressTest();
+	
 	struct FDsu {
 		TArray<int32> Parent;
 		FDsu(int32 n) {
